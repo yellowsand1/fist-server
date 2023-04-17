@@ -1,0 +1,3 @@
+clear_static_times = 10
+server_port = 11118
+log_level = "info"

@@ -1,0 +1,10 @@
+A PRACTICE DISTRIBUTE TRANSACTION MIDDLEWARE WITH FREAKING FAST RUST WEB!
+
+```toml
+clear_static_times = 10
+server_port = 11118
+log_level = "info"
+```
+
+Config above , support toml_config only.
+Just run the server and config the server to every client.
