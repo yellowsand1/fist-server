@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::ops::AddAssign;
+use std::sync::Arc;
 use std::time::Duration;
 use actix_web::HttpRequest;
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, Semaphore};
 use crate::SETTINGS;
 use anyhow::Result;
 use lazy_static::lazy_static;
@@ -139,15 +140,21 @@ async fn scan_static_resource(fist_id: String) -> Result<()> {
 
 async fn send_rollback(fist_id: &str) -> Result<(), reqwest::Error> {
     let mut tasks = Vec::new();
-    SYNC_INFO.read().await.get(fist_id).unwrap_or(&Vec::new()).iter().for_each(|info| {
-        let url = info.service_addr.clone();
-        let body = info.clone();
-        tasks.push(tokio::spawn(async move {
-            if let Err(e) = call_service(&url, body).await {
-                error!("rollback request callback error: {:?}", e);
-            }
-        }));
-    });
+    let semaphore = Arc::new(Semaphore::new(100));
+    if let Some(infos) = SYNC_INFO.read().await.get(fist_id) {
+        for info in infos {
+            let url = info.service_addr.clone();
+            let body = info.clone();
+            let semaphone_clone = Arc::clone(&semaphore);
+            tasks.push(tokio::spawn(async move {
+                //permit automatically drop when out of scope
+                let _permit = semaphone_clone.acquire().await;
+                if let Err(e) = call_service(&url, body).await {
+                    error!("rollback request callback error: {:?}", e);
+                }
+            }));
+        }
+    }
     futures::future::try_join_all(tasks).await.expect("rollback request send error");
     Ok(())
 }
