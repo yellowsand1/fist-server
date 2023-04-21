@@ -10,6 +10,7 @@ use lazy_static::lazy_static;
 use log::{error, info};
 use serde::Serialize;
 use crate::model::{AsyncFinally, Model, SyncInfo, SyncInfoWrapper};
+use reqwest::Client;
 
 lazy_static! {
     /** store the syncInfo in memory **/
@@ -20,6 +21,16 @@ lazy_static! {
     static ref END: RwLock<HashMap<String, bool>> = RwLock::new(HashMap::new());
     /** counter to count the transaction times **/
     static ref COUNTER: RwLock<i128> = RwLock::new(0);
+
+    static ref HTTP_CLIENT: Client = {
+        Client::builder()
+            .pool_max_idle_per_host(20)
+            .timeout(Duration::from_secs(30))
+            .tcp_keepalive(Duration::from_secs(720))
+            .http1_title_case_headers()
+            .build()
+            .unwrap()
+    };
 }
 
 /**
@@ -44,8 +55,6 @@ pub async fn process_sync_info(sync_info: String, request: HttpRequest) -> Resul
     {
         let mut sync_info_map = SYNC_INFO.write().await;
         sync_info_map.entry(fist_id.clone()).or_insert_with(Vec::new).push(info);
-    }
-    {
         let mut roll_back_map = ROLL_BACK.write().await;
         let already_rollback = roll_back_map.entry(fist_id.clone()).or_insert(false);
         let new_rollback = *already_rollback | roll_back;
@@ -98,7 +107,7 @@ async fn scan_static_resource(fist_id: String) -> Result<()> {
             if *ROLL_BACK.read().await.get(&temp_fist_id).unwrap_or(&false) {
                 //send rollback command to all services
                 // tokio::spawn(async move {
-                    send_rollback(&temp_fist_id).await.expect("rollback request send error");
+                send_rollback(&temp_fist_id).await.expect("rollback request send error");
                 // });
             }
             //try block from here and would execute anyway ! What a elegant way to do this !
@@ -143,20 +152,12 @@ async fn send_rollback(fist_id: &str) -> Result<(), reqwest::Error> {
     Ok(())
 }
 
-
 async fn call_service<T>(url: &str, body: T) -> Result<(), reqwest::Error>
     where
         T: Serialize + Model + Send + Sync + 'static,
 {
     let url = url.to_string();
-    let client = reqwest::Client::builder()
-        .pool_max_idle_per_host(20)
-        .timeout(Duration::from_secs(30))
-        .tcp_keepalive(Duration::from_secs(7200))
-        .http1_title_case_headers()
-        .build()
-        .unwrap();
-    let response = client
+    let response = HTTP_CLIENT
         .post(&url)
         .header("Content-Type", "application/json")
         .header("Connection", "keep-alive")
@@ -172,4 +173,3 @@ async fn call_service<T>(url: &str, body: T) -> Result<(), reqwest::Error>
     }
     Ok(())
 }
-

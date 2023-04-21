@@ -1,7 +1,7 @@
 use std::env;
 use std::sync::Mutex;
 use actix_web::{App, get, HttpRequest, HttpResponse, HttpServer, post, Responder, web};
-use config::{Config, File, FileFormat};
+use config::{Config, File};
 use log::{error, info};
 use anyhow::Result;
 use fist::errors::WebError;
