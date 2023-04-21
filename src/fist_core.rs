@@ -107,9 +107,7 @@ async fn scan_static_resource(fist_id: String) -> Result<()> {
             let temp_fist_id = fist_id.clone();
             if *ROLL_BACK.read().await.get(&temp_fist_id).unwrap_or(&false) {
                 //send rollback command to all services
-                // tokio::spawn(async move {
                 send_rollback(&temp_fist_id).await.expect("rollback request send error");
-                // });
             }
             //try block from here and would execute anyway ! What a elegant way to do this !
             let finally_future = async move {

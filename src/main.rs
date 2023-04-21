@@ -1,8 +1,7 @@
 use std::env;
-use std::sync::Mutex;
-use actix_web::{App, get, HttpRequest, HttpResponse, HttpServer, post, Responder, web};
+use actix_web::{App, HttpRequest, HttpResponse, HttpServer, post, Responder, web};
 use config::{Config, File};
-use log::{error, info};
+use log::{info};
 use anyhow::Result;
 use fist::errors::WebError;
 use fist::fist_core::process_sync_info;
@@ -17,34 +16,6 @@ async fn post(request: HttpRequest, sync_info: String) -> Result<impl Responder,
 struct AppState {
     app_name: String,
 }
-
-struct AppStateWithCounter {
-    counter: Mutex<i32>, // <- Mutex is necessary to mutate safely across threads
-}
-
-async fn manual_hello() -> impl Responder {
-    HttpResponse::Ok().body("hi there!")
-}
-
-#[get("/index")]
-async fn index(data: web::Data<AppState>) -> String {
-    let app_name = &data.app_name; // <- get app_name
-    format!("Hello {app_name}!") // <- response with app_name
-}
-
-use std::net::SocketAddr;
-
-#[get("/test")]
-async fn test(request: HttpRequest) -> Result<impl Responder, WebError> {
-    let peer_addr: Option<SocketAddr> = request.peer_addr();
-    if let Some(addr) = peer_addr {
-        info!("Client IP: {}, Port: {}", addr.ip(), addr.port());
-    } else {
-        error!("Unable to get client address,{:?}",request);
-    }
-    Ok(HttpResponse::Ok())
-}
-
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
@@ -70,12 +41,8 @@ async fn main() -> std::io::Result<()> {
         App::new()
             .app_data(web::Data::new(AppState {
                 app_name: "fist".to_string(),
-
             }))
-            .service(index)
             .service(post)
-            .service(test)
-            .route("hey", web::get().to(manual_hello))
     })
         .bind(("127.0.0.1", SETTINGS.read().await.get_int("server_port").unwrap() as u16))?;
     info!("Fist server start to run on port:{:?}!", SETTINGS.read().await.get_int("server_port").unwrap());
