@@ -27,3 +27,5 @@ config = "0.13.3"
 arc-swap = "1.6.0"
 reqwest = { version = "0.11", features = ["json"] }
 futures = "0.3"
+num_cpus = "1.15.0"
+dashmap = "5.4.0"

@@ -1,8 +1,9 @@
 use std::env;
-use actix_web::{App, HttpRequest, HttpResponse, HttpServer, post, Responder, web};
-use config::{Config, File};
-use log::{info};
+use std::time::Duration;
+use actix_web::{App, get, HttpRequest, HttpResponse, HttpServer, post, Responder, web};
 use anyhow::Result;
+use config::{Config, File};
+use log::info;
 use fist::errors::WebError;
 use fist::fist_core::process_sync_info;
 use fist::SETTINGS;
@@ -13,8 +14,10 @@ async fn post(request: HttpRequest, sync_info: String) -> Result<impl Responder,
     Ok(HttpResponse::Ok())
 }
 
-struct AppState {
-    app_name: String,
+#[post("/fist/test")]
+async fn test() -> impl Responder {
+    info!("test");
+    HttpResponse::Ok().body("Hello world!")
 }
 
 #[actix_web::main]
@@ -39,11 +42,14 @@ async fn main() -> std::io::Result<()> {
     //actix configure
     let server = HttpServer::new(move || {
         App::new()
-            .app_data(web::Data::new(AppState {
-                app_name: "fist".to_string(),
-            }))
+            // .app_data(web::Data::new(AppState {
+            //     app_name: "fist".to_string(),
+            // }))
             .service(post)
+            .service(test)
     })
+        .keep_alive(Duration::from_secs(75))
+        .workers(SETTINGS.read().await.get_int("server_workers").unwrap() as usize)
         .bind(("127.0.0.1", SETTINGS.read().await.get_int("server_port").unwrap() as u16))?;
     info!("Fist server start to run on port:{:?}!", SETTINGS.read().await.get_int("server_port").unwrap());
 

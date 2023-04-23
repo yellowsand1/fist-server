@@ -1,42 +1,44 @@
-use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::ops::AddAssign;
 use std::sync::Arc;
 use std::time::Duration;
 use actix_web::HttpRequest;
 use tokio::sync::{RwLock, Semaphore};
-use crate::SETTINGS;
 use anyhow::Result;
 use lazy_static::lazy_static;
 use log::{error, info};
 use serde::Serialize;
 use crate::model::{AsyncFinally, Model, SyncInfo, SyncInfoWrapper};
 use reqwest::Client;
+use dashmap::DashMap;
+use futures::future::try_join_all;
 
 lazy_static! {
     /** store the syncInfo in memory **/
-    static ref SYNC_INFO: RwLock<HashMap<String, Vec<SyncInfo>>> = RwLock::new(HashMap::new());
+    static ref SYNC_INFO: DashMap<String, Vec<SyncInfo>> = DashMap::new();
     /** store the rollback command stateMachine and change every request **/
-    static ref ROLL_BACK: RwLock<HashMap<String, bool>> = RwLock::new(HashMap::new());
+    static ref ROLL_BACK: DashMap<String, bool> = DashMap::new();
     /** store the end of request from java client **/
-    static ref END: RwLock<HashMap<String, bool>> = RwLock::new(HashMap::new());
+    static ref END: DashMap<String, bool> = DashMap::new();
     /** counter to count the transaction times **/
-    static ref COUNTER: RwLock<i128> = RwLock::new(0);
-
+    static ref COUNTER: Arc::<RwLock<i128>> = Arc::new(RwLock::new(0));
+    /** static the reqwest client **/
     static ref HTTP_CLIENT: Client = {
         Client::builder()
             .pool_max_idle_per_host(20)
-            .timeout(Duration::from_secs(30))
-            .tcp_keepalive(Duration::from_secs(720))
+            .timeout(Duration::from_secs(15))
+            .tcp_keepalive(Duration::from_secs(7200))
             .http1_title_case_headers()
             .build()
             .unwrap()
     };
+    /** semaphore to limit the number of concurrent requests, set the concurrency to cpu * 8 for now **/
+    static ref SEMAPHORE: Arc<Semaphore> = Arc::new(Semaphore::new(20));
 }
 
 /**
  *@description Process sync_info from java client when a globalTransaction is triggered
- * I'll use a static HashMap to store group the sync_info by fist_id,
+ * I'll use a static HashMap to store and group the sync_info by fist_id,
  * then I'll need another static HashMap to store if rollback the transaction or not
  * which is the implementation of stateMachine.
  * Of course I should store if the transaction is ended or not.
@@ -53,22 +55,26 @@ pub async fn process_sync_info(sync_info: String, request: HttpRequest) -> Resul
     let fist_id = info.fist_id.clone();
     let roll_back = info.rollback.clone();
     let end = info.end.clone();
+    let new_rollback;
+    let new_end;
     {
-        let mut sync_info_map = SYNC_INFO.write().await;
-        sync_info_map.entry(fist_id.clone()).or_insert_with(Vec::new).push(info);
-        let mut roll_back_map = ROLL_BACK.write().await;
-        let already_rollback = roll_back_map.entry(fist_id.clone()).or_insert(false);
-        let new_rollback = *already_rollback | roll_back;
-        roll_back_map.insert(fist_id.clone(), new_rollback);
-        let mut end_map = END.write().await;
-        let already_end = end_map.entry(fist_id.clone()).or_insert(false);
-        let new_end = *already_end | end;
-        end_map.insert(fist_id.clone(), new_end);
+        SYNC_INFO.entry(fist_id.clone()).or_insert_with(Vec::new).push(info);
+        new_rollback = ROLL_BACK.entry(fist_id.clone()).or_insert(false).value() | roll_back;
+        ROLL_BACK.insert(fist_id.clone(), new_rollback);
+        new_end = END.entry(fist_id.clone()).or_insert(false).value() | end;
+        END.insert(fist_id.clone(), new_end);
+    }
+    let id_for_log = fist_id.clone();
+    {
+        scan_static_resource(fist_id, new_rollback, new_end).await?;
+    }
+    info!("SyncInfo : {:?}",SYNC_INFO.get(&id_for_log).unwrap().value());
+    {
+        COUNTER.write().await.add_assign(1);
     }
     {
-        info!("SyncInfo: {:?}", SYNC_INFO.read().await);
+        info!("Counter : {:?}",COUNTER.read().await);
     }
-    scan_static_resource(fist_id).await?;
     Ok(())
 }
 
@@ -95,42 +101,25 @@ async fn record_service_addr(sync_info: &mut SyncInfo, request: HttpRequest) -> 
  *@author hyl
  *@date 2023/4/11
  */
-async fn scan_static_resource(fist_id: String) -> Result<()> {
-    if let Some(sync_info) = SYNC_INFO.read().await.get(&fist_id) {
-        let times;
-        {
-            times = SETTINGS.read().await.get_int("clear_static_times")?;
-        }
-        let is_end = sync_info.iter().any(|info| info.end);
+async fn scan_static_resource(fist_id: String, rollback: bool, end: bool) -> Result<()> {
+    if let Some(_sync_info) = SYNC_INFO.get(&fist_id) {
         //should add more information like count of services to judge if should end now in very short future if necessary
-        if is_end {
+        if end {
             let temp_fist_id = fist_id.clone();
-            if *ROLL_BACK.read().await.get(&temp_fist_id).unwrap_or(&false) {
-                //send rollback command to all services
-                send_rollback(&temp_fist_id).await.expect("rollback request send error");
-            }
             //try block from here and would execute anyway ! What a elegant way to do this !
             let finally_future = async move {
-                let t;
                 {
                     // Clear static resource according to fist_id
-                    let mut sync_info = SYNC_INFO.write().await;
-                    let mut roll_back = ROLL_BACK.write().await;
-                    let mut end_map = END.write().await;
-                    let mut counter = COUNTER.write().await;
-                    sync_info.remove(&fist_id);
-                    roll_back.remove(&fist_id);
-                    end_map.remove(&fist_id);
-                    counter.add_assign(1);
-                    t = *counter % times as i128;
-                }
-                if t == 0 {
-                    SYNC_INFO.write().await.shrink_to_fit();
-                    ROLL_BACK.write().await.shrink_to_fit();
-                    END.write().await.shrink_to_fit();
+                    let _ = SYNC_INFO.remove(&fist_id);
+                    let _ = ROLL_BACK.remove(&fist_id);
+                    let _ = END.remove(&fist_id);
                 }
             };
             let _async_finally = AsyncFinally::new(finally_future);
+            if rollback {
+                //send rollback command to all services
+                send_rollback(&temp_fist_id).await.expect("rollback request send error");
+            }
         }
     }
     Ok(())
@@ -138,22 +127,21 @@ async fn scan_static_resource(fist_id: String) -> Result<()> {
 
 async fn send_rollback(fist_id: &str) -> Result<(), reqwest::Error> {
     let mut tasks = Vec::new();
-    let semaphore = Arc::new(Semaphore::new(100));
-    if let Some(infos) = SYNC_INFO.read().await.get(fist_id) {
-        for info in infos {
+    if let Some(infos) = SYNC_INFO.get(fist_id) {
+        for info in infos.value() {
             let url = info.service_addr.clone();
             let body = info.clone();
-            let semaphone_clone = Arc::clone(&semaphore);
+            let semaphore_clone = Arc::clone(&SEMAPHORE);
             tasks.push(tokio::spawn(async move {
                 //permit automatically drop when out of scope
-                let _permit = semaphone_clone.acquire().await;
+                let _permit = semaphore_clone.acquire().await;
                 if let Err(e) = call_service(&url, body).await {
                     error!("rollback request callback error: {:?}", e);
                 }
             }));
         }
+        try_join_all(tasks).await.expect("rollback request send error}");
     }
-    futures::future::try_join_all(tasks).await.expect("rollback request send error");
     Ok(())
 }
 
