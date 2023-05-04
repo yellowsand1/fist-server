@@ -46,6 +46,7 @@ pub struct SyncInfo {
     #[serde(skip_serializing, skip_deserializing)]
     pub service_addr: String,
     pub service_port: i32,
+    pub group: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Model)]

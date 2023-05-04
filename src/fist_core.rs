@@ -9,9 +9,12 @@ use lazy_static::lazy_static;
 use log::{error, info};
 use serde::Serialize;
 use crate::model::{AsyncFinally, Model, SyncInfo, SyncInfoWrapper};
-use reqwest::Client;
+use reqwest::{Client};
 use dashmap::DashMap;
 use futures::future::try_join_all;
+use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
+use reqwest_retry::RetryTransientMiddleware;
+use retry_policies::policies::ExponentialBackoff;
 
 lazy_static! {
     /** store the syncInfo in memory **/
@@ -23,16 +26,20 @@ lazy_static! {
     /** counter to count the transaction times **/
     static ref COUNTER: Arc::<RwLock<i128>> = Arc::new(RwLock::new(0));
     /** static the reqwest client **/
-    static ref HTTP_CLIENT: Client = {
-        Client::builder()
+    static ref CLIENT_WITH_RETRY:ClientWithMiddleware = ClientBuilder::new(Client::builder()
             .pool_max_idle_per_host(20)
             .timeout(Duration::from_secs(15))
             .tcp_keepalive(Duration::from_secs(7200))
             .http1_title_case_headers()
             .build()
-            .unwrap()
-    };
-    /** semaphore to limit the number of concurrent requests, set the concurrency to cpu * 8 for now **/
+            .unwrap())
+        .with(RetryTransientMiddleware::new_with_policy(ExponentialBackoff {
+            max_n_retries: 3,
+            min_retry_interval: Duration::from_millis(100),
+            max_retry_interval: Duration::from_secs(1),
+            backoff_exponent: 2,
+        })).build();
+    /** semaphore to limit the number of concurrent requests, set the concurrency to 20 for now **/
     static ref SEMAPHORE: Arc<Semaphore> = Arc::new(Semaphore::new(20));
 }
 
@@ -87,7 +94,6 @@ async fn record_service_addr(sync_info: &mut SyncInfo, request: HttpRequest) -> 
         ip.push_str(&addr.ip().to_string());
         ip.push_str(":");
         ip.push_str(&port);
-        ip.push_str("/fist/core");
         sync_info.service_addr = ip;
     } else {
         error!("Unable to get client address,{:?}",request);
@@ -102,34 +108,44 @@ async fn record_service_addr(sync_info: &mut SyncInfo, request: HttpRequest) -> 
  *@date 2023/4/11
  */
 async fn scan_static_resource(fist_id: String, rollback: bool, end: bool) -> Result<()> {
-    if let Some(_sync_info) = SYNC_INFO.get(&fist_id) {
-        //should add more information like count of services to judge if should end now in very short future if necessary
-        if end {
-            let temp_fist_id = fist_id.clone();
-            //try block from here and would execute anyway ! What a elegant way to do this !
-            let finally_future = async move {
-                {
-                    // Clear static resource according to fist_id
-                    let _ = SYNC_INFO.remove(&fist_id);
-                    let _ = ROLL_BACK.remove(&fist_id);
-                    let _ = END.remove(&fist_id);
-                }
-            };
-            let _async_finally = AsyncFinally::new(finally_future);
-            if rollback {
-                //send rollback command to all services
-                send_rollback(&temp_fist_id).await.expect("rollback request send error");
+    //should add more information like count of services to judge if should end now in very short future if necessary
+    if end {
+        let temp_fist_id = fist_id.clone();
+        //try block from here and would execute anyway ! What a elegant way to do this !
+        let finally_future = async move {
+            {
+                // Clear static resource according to fist_id
+                let _ = SYNC_INFO.remove(&fist_id);
+                let _ = ROLL_BACK.remove(&fist_id);
+                let _ = END.remove(&fist_id);
             }
+        };
+        let _async_finally = AsyncFinally::new(finally_future);
+        if rollback {
+            //send rollback command to all services
+            send_rollback(&temp_fist_id, "/fist/core").await.expect("request send error");
+        } else {
+            //send ok command to all services
+            send_rollback(&temp_fist_id, "/fist/ok").await.expect("request send error");
         }
     }
     Ok(())
 }
 
-async fn send_rollback(fist_id: &str) -> Result<(), reqwest::Error> {
+async fn send_rollback(fist_id: &str, path: &str) -> Result<(), reqwest::Error> {
     let mut tasks = Vec::new();
-    if let Some(infos) = SYNC_INFO.get(fist_id) {
-        for info in infos.value() {
-            let url = info.service_addr.clone();
+    // Get the value of infos from SYNC_INFO and clone it to a local variable.
+    let local_infos = {
+        if let Some(infos) = SYNC_INFO.get(fist_id) {
+            Some(infos.value().clone())
+        } else {
+            None
+        }
+    };
+    if let Some(infos) = local_infos {
+        for info in &infos {
+            let mut url = info.service_addr.clone();
+            url.push_str(path);
             let body = info.clone();
             let semaphore_clone = Arc::clone(&SEMAPHORE);
             tasks.push(tokio::spawn(async move {
@@ -150,7 +166,7 @@ async fn call_service<T>(url: &str, body: T) -> Result<(), reqwest::Error>
         T: Serialize + Model + Send + Sync + 'static,
 {
     let url = url.to_string();
-    let response = HTTP_CLIENT
+    let response = CLIENT_WITH_RETRY
         .post(&url)
         .header("Content-Type", "application/json")
         .header("Connection", "keep-alive")
@@ -158,10 +174,10 @@ async fn call_service<T>(url: &str, body: T) -> Result<(), reqwest::Error>
         .send().await;
     match response {
         Ok(res) => {
-            info!("rollback request callback status: {:?}, url: {:?}", res.status(), url);
+            info!("request callback status: {:?}, url: {:?}", res.status(), url);
         }
         Err(e) => {
-            error!("rollback request callback error: {:?}", e);
+            error!("request callback error: {:?}", e);
         }
     }
     Ok(())
