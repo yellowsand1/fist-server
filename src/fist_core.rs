@@ -3,18 +3,19 @@ use std::ops::AddAssign;
 use std::sync::Arc;
 use std::time::Duration;
 use actix_web::HttpRequest;
-use tokio::sync::{RwLock, Semaphore};
 use anyhow::Result;
-use lazy_static::lazy_static;
-use log::{error, info};
-use serde::Serialize;
-use crate::model::{AsyncFinally, Model, SyncInfo, SyncInfoWrapper};
-use reqwest::{Client};
 use dashmap::DashMap;
 use futures::future::try_join_all;
+use lazy_static::lazy_static;
+use log::{error, info};
+use reqwest::Client;
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
 use reqwest_retry::RetryTransientMiddleware;
 use retry_policies::policies::ExponentialBackoff;
+use serde::Serialize;
+use tokio::sync::{RwLock, Semaphore};
+
+use crate::model::{AsyncFinally, Model, SyncInfo, SyncInfoWrapper};
 
 lazy_static! {
     /** store the syncInfo in memory **/
@@ -59,9 +60,9 @@ pub async fn process_sync_info(sync_info: String, request: HttpRequest) -> Resul
     {
         record_service_addr(&mut info, request).await?;
     }
-    let fist_id = info.fist_id.clone();
-    let roll_back = info.rollback.clone();
-    let end = info.end.clone();
+    let fist_id = info.fist_id.clone().unwrap();
+    let roll_back = info.rollback.clone().unwrap();
+    let end = info.end.clone().unwrap();
     let new_rollback;
     let new_end;
     {
@@ -86,7 +87,7 @@ pub async fn process_sync_info(sync_info: String, request: HttpRequest) -> Resul
 }
 
 async fn record_service_addr(sync_info: &mut SyncInfo, request: HttpRequest) -> Result<()> {
-    let port = sync_info.service_port.to_string();
+    let port = sync_info.service_port.unwrap().to_string();
     let peer_addr: Option<SocketAddr> = request.peer_addr();
     if let Some(addr) = peer_addr {
         info!("Client IP: {}, Port: {}", addr.ip(), port);
@@ -94,7 +95,7 @@ async fn record_service_addr(sync_info: &mut SyncInfo, request: HttpRequest) -> 
         ip.push_str(&addr.ip().to_string());
         ip.push_str(":");
         ip.push_str(&port);
-        sync_info.service_addr = ip;
+        sync_info.service_addr = Some(ip);
     } else {
         error!("Unable to get client address,{:?}",request);
     }
@@ -123,16 +124,16 @@ async fn scan_static_resource(fist_id: String, rollback: bool, end: bool) -> Res
         let _async_finally = AsyncFinally::new(finally_future);
         if rollback {
             //send rollback command to all services
-            send_rollback(&temp_fist_id, "/fist/core").await.expect("request send error");
+            send_rollback_n_ok(&temp_fist_id, "/fist/core").await.expect("request send error");
         } else {
             //send ok command to all services
-            send_rollback(&temp_fist_id, "/fist/ok").await.expect("request send error");
+            send_rollback_n_ok(&temp_fist_id, "/fist/ok").await.expect("request send error");
         }
     }
     Ok(())
 }
 
-async fn send_rollback(fist_id: &str, path: &str) -> Result<(), reqwest::Error> {
+async fn send_rollback_n_ok(fist_id: &str, path: &str) -> Result<(), reqwest::Error> {
     let mut tasks = Vec::new();
     // Get the value of infos from SYNC_INFO and clone it to a local variable.
     let local_infos = {
@@ -144,7 +145,7 @@ async fn send_rollback(fist_id: &str, path: &str) -> Result<(), reqwest::Error> 
     };
     if let Some(infos) = local_infos {
         for info in &infos {
-            let mut url = info.service_addr.clone();
+            let mut url = info.service_addr.clone().unwrap();
             url.push_str(path);
             let body = info.clone();
             let semaphore_clone = Arc::clone(&SEMAPHORE);

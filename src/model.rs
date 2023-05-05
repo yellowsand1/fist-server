@@ -39,21 +39,21 @@ pub struct SyncInfoWrapper {
 #[derive(Debug, Serialize, Deserialize, Clone, Model)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncInfo {
-    pub fist_id: String,
-    pub rollback: bool,
-    pub rollback_sql: Vec<RollBackSql>,
-    pub end: bool,
+    pub fist_id: Option<String>,
+    pub rollback: Option<bool>,
+    pub rollback_sql: Option<Vec<RollBackSql>>,
+    pub end: Option<bool>,
     #[serde(skip_serializing, skip_deserializing)]
-    pub service_addr: String,
-    pub service_port: i32,
-    pub group: String,
+    pub service_addr: Option<String>,
+    pub service_port: Option<i32>,
+    pub group: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Model)]
 #[serde(rename_all = "camelCase")]
 pub struct RollBackSql {
-    pub sql: String,
-    pub params: Vec<Vec<serde_json::Value>>,
+    pub sql: Option<String>,
+    pub params: Option<Vec<Vec<serde_json::Value>>>,
 }
 
 //implementation of try finally

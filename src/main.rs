@@ -1,6 +1,6 @@
 use std::env;
 use std::time::Duration;
-use actix_web::{App, get, HttpRequest, HttpResponse, HttpServer, post, Responder, web};
+use actix_web::{App, HttpRequest, HttpResponse, HttpServer, post, Responder, web};
 use anyhow::Result;
 use config::{Config, File};
 use log::info;
@@ -9,15 +9,9 @@ use fist::fist_core::process_sync_info;
 use fist::SETTINGS;
 
 #[post("/fist/core")]
-async fn post(request: HttpRequest, sync_info: String) -> Result<impl Responder, WebError> {
+async fn core(request: HttpRequest, sync_info: String) -> Result<impl Responder, WebError> {
     process_sync_info(sync_info, request).await.map_err(WebError)?;
-    Ok(HttpResponse::Ok())
-}
-
-#[post("/fist/test")]
-async fn test() -> impl Responder {
-    info!("test");
-    HttpResponse::Ok().body("Hello world!")
+    Ok(HttpResponse::Ok().body("ok"))
 }
 
 #[actix_web::main]
@@ -45,8 +39,7 @@ async fn main() -> std::io::Result<()> {
             // .app_data(web::Data::new(AppState {
             //     app_name: "fist".to_string(),
             // }))
-            .service(post)
-            .service(test)
+            .service(core)
     })
         .keep_alive(Duration::from_secs(75))
         .workers(SETTINGS.read().await.get_int("server_workers").unwrap() as usize)
