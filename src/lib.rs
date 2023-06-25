@@ -1,6 +1,9 @@
+extern crate core;
+
 pub mod model;
 pub mod fist_core;
 pub mod errors;
+pub mod encrypt;
 
 use actix_web::http::StatusCode;
 use actix_web::HttpResponse;

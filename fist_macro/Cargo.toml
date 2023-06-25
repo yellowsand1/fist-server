@@ -1,8 +1,8 @@
 [package]
 name = "fist_macro"
 version = "0.1.0"
-authors = ["huangyinglun <huangyinglun@dreamdt.cn>"]
-description = "A `cargo generate` template for quick-starting a procedural macro crate"
+authors = ["huangyinglun <503375725@qq.com>"]
+description = "fist macro_proc"
 keywords = ["template", "proc_macro", "procmacro"]
 edition = "2021"
 

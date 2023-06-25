@@ -2,7 +2,8 @@
 name = "fist"
 version = "0.1.1"
 edition = "2021"
-
+authors = ["huangyinglun <503375725@qq.com>"]
+description = "fist distribute transaction server for Java"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [[bin]]
 name = "fist"
@@ -11,7 +12,7 @@ path = "src/main.rs"
 [dependencies]
 fist_lib = { version = "0.1.0", path = "./fist_lib" }
 fist_macro = { version = "0.1.0", path = "./fist_macro" }
-tokio = { vwesion = "1.23.0", features = ["full"] }
+tokio = { version = "1.23.0", features = ["full"] }
 actix-web = "4.2.1"
 anyhow = "1.0.68"
 serde = { version = "1.0.152", features = ["derive"] }
@@ -32,3 +33,5 @@ dashmap = "5.4.0"
 reqwest-retry = "0.2.0"
 reqwest-middleware= "0.2.0"
 retry-policies = "0.1.2"
+rust-crypto = "0.2.36"
+base64 = "0.21.0-rc.1"

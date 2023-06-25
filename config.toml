@@ -1,3 +1,4 @@
 server_port = 11118
 server_workers = 16
 log_level = "info"
+key = "1q2w#E$R"

@@ -14,6 +14,7 @@ use reqwest_retry::RetryTransientMiddleware;
 use retry_policies::policies::ExponentialBackoff;
 use serde::Serialize;
 use tokio::sync::{RwLock, Semaphore};
+use crate::encrypt::{decrypt, encrypt};
 
 use crate::model::{AsyncFinally, Model, SyncInfo, SyncInfoWrapper};
 
@@ -57,6 +58,8 @@ lazy_static! {
 pub async fn process_sync_info(sync_info: String, request: HttpRequest) -> Result<()> {
     let info: SyncInfoWrapper = serde_json::from_str(&sync_info)?;
     let mut info = info.sync_info;
+    let encrypted = encrypt(info.fist_id.as_mut().unwrap()).await.unwrap();
+    info.fist_id = Some(encrypted);
     {
         record_service_addr(&mut info, request).await?;
     }
